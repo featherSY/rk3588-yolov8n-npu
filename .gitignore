@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+yolo_env/
+!scripts/env/
+!scripts/env/**
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.codebuddy/
+
+# 二进制依赖与模型（体积大且可从 pip / 转换流程复现）
+rk3588-packages/
+*.whl
+*.so
+*.pt
+*.onnx
+*.rknn
+*.engine
+*.tflite
+*.zip
+*.onnx.int8
+augmented_model.onnx
+
+# 运行产物
+results/*
+!results/.gitkeep
+runs/
+*.log
+*.mp4
+*.avi
+preds*.json
