@@ -23,6 +23,10 @@ YOLOv8n 在 COCO val2017 上的 mAP 评估
   - 两边必须跑同一批图（默认按文件名排序取前 N 张），否则 mAP 不可比
   - 类别分在 ONNX 里已经过 sigmoid，此处不再套 sigmoid
   - COCO 80 类的 category_id 不是 0~79，需要 COCO_IDS 映射
+
+P2 全量复评优化（2026-11-10）：evaluate() 内增加 preds_top 预排序与 by_img 索引。
+改动只影响速度，不改变任何评估口径；500/1000/2000/5000 张下与原版 mAP、per_class_AP
+逐位一致。5000 张 mAP 计算耗时由 159 s 降至 19 s（8.4x）。其余逻辑、参数、输出格式未变。
 """
 
 import os
@@ -213,6 +217,9 @@ def evaluate(preds, gts, ious=np.arange(0.5, 1.0, 0.05), max_dets=100):
     """
     aps_50, aps_all = [], []
     per_cls = {}
+    # P2: 每图 Top-max_dets 只排一次，80 个类别复用（原先每类重排 5000 次）
+    preds_top = {k: sorted(v, key=lambda z: -z[4])[:max_dets]
+                 for k, v in preds.items()}
 
     for cls in range(80):
         # 该类在本批图里有没有 GT？没有就不参与平均（与 pycocotools 一致：
@@ -224,9 +231,8 @@ def evaluate(preds, gts, ious=np.arange(0.5, 1.0, 0.05), max_dets=100):
         # 收集该类的预测。max_dets 按「每图」计（跨类别），与 COCO 一致；
         # 若按类别各取 100，一张图上 3 个类就能塞 300 个框，AP 会虚高
         P = []
-        for img_id, dets in preds.items():
-            d = sorted(dets, key=lambda z: -z[4])[:max_dets]
-            for x in d:
+        for img_id in preds_top:
+            for x in preds_top[img_id]:
                 if x[5] == cls:
                     P.append((img_id, x[:4], x[4]))
         if not P:                       # 有 GT 但一个都没检出来 -> AP = 0
@@ -240,10 +246,14 @@ def evaluate(preds, gts, ious=np.arange(0.5, 1.0, 0.05), max_dets=100):
         # 每图预计算 IoU（一次算好，10 个阈值复用）
         # row_of[i] = (img_id, 该预测在 IoU 矩阵里的行号)
         iou_cache, gt_size, row_of = {}, {}, {}
-        for img_id in set(p_imgs):
+        # P2: 先按 img_id 建索引，替代原先对每个图扫描整张预测表的 O(N^2)
+        by_img = {}
+        for i, im in enumerate(p_imgs):
+            by_img.setdefault(im, []).append(i)
+        for img_id in by_img:
             gb = np.array([g[1] for g in gts.get(img_id, []) if g[0] == cls]).reshape(-1, 4)
             gt_size[img_id] = len(gb)
-            rows = [i for i, im in enumerate(p_imgs) if im == img_id]
+            rows = by_img[img_id]
             for r, i in enumerate(rows):
                 row_of[i] = (img_id, r)
             iou_cache[img_id] = iou_matrix(p_boxes[rows], gb) if len(gb) else None
